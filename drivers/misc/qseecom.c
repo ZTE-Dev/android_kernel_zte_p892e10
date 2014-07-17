@@ -1804,8 +1804,8 @@ static int __qseecom_load_fw(struct qseecom_dev_handle *data, char *appname)
 	memcpy(load_req.app_name, appname, MAX_APP_NAME_SIZE);
 	ret = __qseecom_enable_clk_scale_up(data);
 	if (ret) {
-		kzfree(img_data);
-		return -EIO;
+		ret = -EIO;
+		goto loadfw_err;
 	}
 
 	__cpuc_flush_dcache_area((void *)img_data, fw_size);
@@ -1813,7 +1813,6 @@ static int __qseecom_load_fw(struct qseecom_dev_handle *data, char *appname)
 	ret = scm_call(SCM_SVC_TZSCHEDULER, 1,	&load_req,
 			sizeof(struct qseecom_load_app_ireq),
 			&resp, sizeof(resp));
-	kzfree(img_data);
 	if (ret) {
 		pr_err("scm_call to load failed : ret %d\n", ret);
 		__qseecom_disable_clk_scale_down(data);
@@ -1839,6 +1838,9 @@ static int __qseecom_load_fw(struct qseecom_dev_handle *data, char *appname)
 		ret = -EINVAL;
 		break;
 	}
+
+loadfw_err:
+	kzfree(img_data);
 	__qseecom_disable_clk_scale_down(data);
 
 	return ret;
