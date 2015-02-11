@@ -22,71 +22,87 @@
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
-#include <linux/kernel.h>
-#include <linux/module.h>
+#include <linux/firmware.h>
 #include <linux/gpio.h>
 #include <linux/of_gpio.h>
 #include <linux/regulator/consumer.h>
 #include <linux/firmware.h>
 #include <linux/debugfs.h>
 #include <linux/input/ft5x06_ts.h>
-
-#include "ft5x0x_ts_fwup.c" //add for ADB update
-
+#include <linux/interrupt.h>
+#include <linux/module.h>
+#include <linux/slab.h>
+#include <linux/wakelock.h>
+#include <linux/power_supply.h>
+#include <linux/input/mt.h>
+#include "ft5x06_ts.h"
 #if defined(CONFIG_FB)
 #include <linux/notifier.h>
 #include <linux/fb.h>
-
 #elif defined(CONFIG_HAS_EARLYSUSPEND)
 #include <linux/earlysuspend.h>
-/* Early-suspend level */
-#define FT_SUSPEND_LEVEL 1
 #endif
 
-#define CFG_MAX_TOUCH_POINTS	5
+//register address
+#define FT5X0X_REG_DEVIDE_MODE	0x00
+#define FT5X0X_REG_ROW_ADDR		0x01
+#define FT5X0X_REG_TD_STATUS		0x02
+#define FT5X0X_REG_START_SCAN		0x02
+#define FT5X0X_REG_TOUCH_START	0x03
+#define FT5X0X_REG_VOLTAGE		0x05
+#define FT5X0X_REG_CHIP_ID		0xA3
+#define FT5X0X_ID_G_PMODE			0xA5
+#define FT5x0x_REG_FW_VER			0xA6
+#define FT5x0x_ID_G_FT5201ID		0xA8
+#define FT5X0X_NOISE_FILTER		0x8B
+#define FT5x0x_REG_POINT_RATE		0x88
+#define FT5X0X_REG_THGROUP		0x80
+#define FT5X0X_REG_RESET			0xFC
 
-#define FT_STARTUP_DLY		150
-#define FT_RESET_DLY		20
+#define FT5X0X_DEVICE_MODE_NORMAL	0x00
+#define FT5X0X_DEVICE_MODE_TEST	0x40
+#define FT5X0X_DEVICE_START_CALIB	0x04
+#define FT5X0X_DEVICE_SAVE_RESULT	0x05
 
-#define FT_PRESS		0x7F
-#define FT_MAX_ID		0x0F
-#define FT_TOUCH_STEP		6
-#define FT_TOUCH_X_H_POS	3
-#define FT_TOUCH_X_L_POS	4
-#define FT_TOUCH_Y_H_POS	5
-#define FT_TOUCH_Y_L_POS	6
-#define FT_TOUCH_EVENT_POS	3
-#define FT_TOUCH_ID_POS		5
+#define FT5X0X_POWER_ACTIVE             0x00
+#define FT5X0X_POWER_MONITOR            0x01
+#define FT5X0X_POWER_HIBERNATE          0x03
 
-#define POINT_READ_BUF	(3 + FT_TOUCH_STEP * CFG_MAX_TOUCH_POINTS)
 
-/*register address*/
-#define FT_REG_DEV_MODE		0x00
-#define FT_DEV_MODE_REG_CAL	0x02
-#define FT_REG_ID		0xA3
-#define FT_REG_PMODE		0xA5
-#define FT_REG_FW_VER		0xA6
-#define FT_REG_POINT_RATE	0x88
-#define FT_REG_THGROUP		0x80
-#define FT_REG_ECC		0xCC
-#define FT_REG_RESET_FW		0x07
+/* ft5x0x register list */
+#define FT5X0X_TOUCH_LENGTH		6
 
-/* power register bits*/
-#define FT_PMODE_ACTIVE		0x00
-#define FT_PMODE_MONITOR	0x01
-#define FT_PMODE_STANDBY	0x02
-#define FT_PMODE_HIBERNATE	0x03
-#define FT_FACTORYMODE_VALUE	0x40
-#define FT_WORKMODE_VALUE	0x00
-#define FT_RST_CMD_REG1		0xFC
-#define FT_RST_CMD_REG2		0xBC
-#define FT_READ_ID_REG		0x90
-#define FT_ERASE_APP_REG	0x61
-#define FT_ERASE_PANEL_REG	0x63
-#define FT_FW_START_REG		0xBF
+#define FT5X0X_TOUCH_XH			0x00 /* offset from each touch */
+#define FT5X0X_TOUCH_XL			0x01
+#define FT5X0X_TOUCH_YH			0x02
+#define FT5X0X_TOUCH_YL			0x03
+#define FT5X0X_TOUCH_PRESSURE		0x04
+#define FT5X0X_TOUCH_SIZE		0x05
 
-#define FT_STATUS_NUM_TP_MASK	0x0F
+/* ft5x0x bit field definition */
+#define FT5X0X_MODE_NORMAL		0x00
+#define FT5X0X_MODE_SYSINFO		0x10
+#define FT5X0X_MODE_TEST		0x40
+#define FT5X0X_MODE_MASK		0x70
 
+#define FT5X0X_EVENT_DOWN		0x00
+#define FT5X0X_EVENT_UP			0x40
+#define FT5X0X_EVENT_CONTACT		0x80
+#define FT5X0X_EVENT_MASK		0xc0
+
+
+/* ft5x0x firmware upgrade definition */
+#define FT5X0X_FIRMWARE_TAIL		-8 /* base on the end of firmware */
+#define FT5X0X_FIRMWARE_VERION		-2
+#define FT5X0X_PACKET_HEADER		6
+#define FT5X0X_PACKET_LENGTH		128
+
+/* ft5x0x absolute value */
+#define FT5X0X_MAX_FINGER		0x0A
+#define FT5X0X_MAX_SIZE			0xff
+#define FT5X0X_MAX_PRESSURE		0xff
+
+#define NOISE_FILTER_DELAY	HZ
 #define FT_VTG_MIN_UV		2600000
 #define FT_VTG_MAX_UV		3300000
 #define FT_I2C_VTG_MIN_UV	1800000
@@ -233,13 +249,15 @@ struct ft5x06_ts_data {
 	const struct ft5x06_ts_platform_data *pdata;
 	struct regulator *vdd;
 	struct regulator *vcc_i2c;
-	char fw_name[FT_FW_NAME_MAX_LEN];
-	bool loading_fw;
-	u8 family_id;
-	struct dentry *dir;
-	u16 addr;
-	bool suspended;
-	char *ts_info;
+	const struct ft5x06_bus_ops *bops;
+	struct ft5x06_tracker tracker[FT5X0X_MAX_FINGER];
+	int  irq;
+	bool dbgdump;
+	unsigned int test_result;
+	bool in_suspend;
+	struct delayed_work noise_filter_delayed_work;
+	u8 chip_id;
+	u8 is_usb_plug_in;
 #if defined(CONFIG_FB)
 	struct notifier_block fb_notif;
 #elif defined(CONFIG_HAS_EARLYSUSPEND)
@@ -822,47 +840,45 @@ static int ft5x06_fw_upgrade_start(struct i2c_client *client,
 		pkt_buf[4] = (u8) (temp >> FT_8BIT_SHIFT);
 		pkt_buf[5] = (u8) temp;
 
-		for (i = 0; i < temp; i++) {
-			pkt_buf[6 + i] = data[pkt_num * FT_FW_PKT_LEN + i];
-			fw_ecc ^= pkt_buf[6 + i];
+#if defined(CONFIG_FB)
+static int fb_notifier_callback(struct notifier_block *self,
+				 unsigned long event, void *data)
+{
+	struct fb_event *evdata = data;
+	int *blank;
+	struct ft5x06_data *ft5x06 =
+		container_of(self, struct ft5x06_data, fb_notif);
+		
+	if (evdata && evdata->data && event == FB_EVENT_BLANK &&
+			ft5x06 && ft5x06->dev) {		
+		blank = evdata->data;
+		if (*blank == FB_BLANK_UNBLANK) {
+			pr_info("ft5x06 resume!\n");
+			ft5x06_resume(ft5x06);
 		}
-
-		ft5x06_i2c_write(client, pkt_buf, temp + FT_FW_PKT_META_LEN);
-		msleep(FT_FW_PKT_DLY_MS);
+		else if (*blank == FB_BLANK_POWERDOWN) {
+			pr_info("ft5x06 suspend!\n");
+			ft5x06_suspend(ft5x06);
+		}
 	}
-
-	/* send the finishing packet */
-	for (i = 0; i < 6; i++) {
-		temp = FT_FW_LAST_PKT + i;
-		pkt_buf[2] = (u8) (temp >> 8);
-		pkt_buf[3] = (u8) temp;
-		temp = 1;
-		pkt_buf[4] = (u8) (temp >> 8);
-		pkt_buf[5] = (u8) temp;
-		pkt_buf[6] = data[data_len + i];
-		fw_ecc ^= pkt_buf[6];
-		ft5x06_i2c_write(client, pkt_buf, temp + FT_FW_PKT_META_LEN);
-		msleep(FT_FW_PKT_DLY_MS);
-	}
-
-	/* verify checksum */
-	w_buf[0] = FT_REG_ECC;
-	ft5x06_i2c_read(client, w_buf, 1, r_buf, 1);
-	if (r_buf[0] != fw_ecc) {
-		dev_err(&client->dev, "ECC error! dev_ecc=%02x fw_ecc=%02x\n",
-					r_buf[0], fw_ecc);
-		return -EIO;
-	}
-
-	/* reset */
-	w_buf[0] = FT_REG_RESET_FW;
-	ft5x06_i2c_write(client, w_buf, 1);
-	msleep(FT_STARTUP_DLY);
-
-	dev_info(&client->dev, "Firmware upgrade successful\n");
 
 	return 0;
 }
+#elif defined(CONFIG_HAS_EARLYSUSPEND)
+static void ft5x06_early_suspend(struct early_suspend *h)
+{
+	struct ft5x06_data *ft5x06 = container_of(h,
+					struct ft5x06_data, early_suspend);
+	ft5x06_suspend(ft5x06);
+}
+
+static void ft5x06_early_resume(struct early_suspend *h)
+{
+	struct ft5x06_data *ft5x06 = container_of(h,
+					struct ft5x06_data, early_suspend);
+	ft5x06_resume(ft5x06);
+}
+#endif
 
 static int ft5x06_fw_upgrade(struct device *dev, bool force)
 {
@@ -1272,28 +1288,28 @@ proc_read_val(char *page, char **start, off_t off, int count, int *eof,
 	//buf = ft5x06_i2c_read(update_client, FT5X0X_REG_FT5201ID);
 	
 	switch (buf){
-	case 0x57://³¬ÉùGoworld
+	case 0x57://ï¿½ï¿½ï¿½ï¿½Goworld
 		len += sprintf(page + len, "module : %s (0x%x)\n", "FT5x06 + Goworld", buf);
 		break;
-	case 0x51://Å··Æ¹âofilm
+	case 0x51://Å·ï¿½Æ¹ï¿½ofilm
 		len += sprintf(page + len, "module : %s (0x%x)\n", "FT5x06 + ofilm", buf);
 		break;
-	case 0x55://À³±¦
+	case 0x55://ï¿½ï¿½ï¿½ï¿½
 		len += sprintf(page + len, "module : %s (0x%x)\n", "FT5x06 + laibao", buf);
 		break;
 	case 0x5a://
 		len += sprintf(page + len, "module : %s (0x%x)\n", "FT5x06 + TRULY", buf);
 		break;
-	case 0x5f://ÓîË³
+	case 0x5f://ï¿½ï¿½Ë³
 		len += sprintf(page + len, "module : %s (0x%x)\n", "FT5x06 + success", buf);
 		break;
 	case 0x60://
 		len += sprintf(page + len, "module : %s (0x%x)\n", "FT5x06 + lead", buf);
 		break;
-	case 0x5d://±¦Ã÷
+	case 0x5d://ï¿½ï¿½ï¿½ï¿½
 		len += sprintf(page + len, "module : %s (0x%x)\n", "FT5x06 + BM", buf);
 		break;
-	case 0x8f://ÆæÃÀ
+	case 0x8f://ï¿½ï¿½ï¿½ï¿½
 		len += sprintf(page + len, "module : %s (0x%x)\n", "FT5x06 + CMI", buf);
 		break;
 	case 0xA5:
@@ -1339,7 +1355,7 @@ static int proc_write_val(struct file *file, const char *buffer,
 		printk("%s: fts fw update successfully!\n", __func__);
 		ft_update_result_flag=2;
 	}
-	return -EINVAL;//½â¾öÉý¼¶³É¹¦Ö®ºó»¹·´¸´Éý¼¶µÄÎÊÌâ
+	return -EINVAL;//ï¿½ï¿½ï¿½ï¿½ï¿½É¹ï¿½Ö®ï¿½ó»¹·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 }
 //ADD END
 #endif
@@ -1496,144 +1512,104 @@ static int ft5x06_ts_probe(struct i2c_client *client,
 
 	dev_info(&client->dev, "Device ID = 0x%x\n", reg_value);
 
-	if (pdata->family_id != reg_value) {
-		dev_err(&client->dev, "%s:Unsupported controller\n", __func__);
-		goto free_reset_gpio;
+	/* init touch parameter */
+#ifdef CONFIG_TOUCHSCREEN_FT5X06_TYPEB
+	input_mt_init_slots(ft5x06->input, FT5X0X_MAX_FINGER);
+#endif
+	set_bit(ABS_MT_TOUCH_MAJOR, ft5x06->input->absbit);
+	set_bit(ABS_MT_POSITION_X, ft5x06->input->absbit);
+	set_bit(ABS_MT_POSITION_Y, ft5x06->input->absbit);
+	set_bit(ABS_MT_WIDTH_MAJOR, ft5x06->input->absbit);
+	set_bit(INPUT_PROP_DIRECT, ft5x06->input->propbit);
+
+	input_set_abs_params(ft5x06->input,
+			     ABS_MT_POSITION_X, 0, pdata->x_max, 0, 0);
+	input_set_abs_params(ft5x06->input,
+			     ABS_MT_POSITION_Y, 0, pdata->y_max, 0, 0);
+	input_set_abs_params(ft5x06->input,
+			     ABS_MT_TOUCH_MAJOR, 0, pdata->z_max, 0, 0);
+	input_set_abs_params(ft5x06->input,
+			     ABS_MT_WIDTH_MAJOR, 0, pdata->w_max, 0, 0);
+	input_set_abs_params(ft5x06->input,
+			     ABS_MT_TRACKING_ID, 0, 10, 0, 0);
+
+	set_bit(EV_KEY, ft5x06->input->evbit);
+	set_bit(EV_ABS, ft5x06->input->evbit);
+
+	error = ft5x06_read_byte(ft5x06, FT5X0X_REG_CHIP_ID, &ft5x06->chip_id);
+	if (error) {
+		dev_err(dev, "failed to read chip id\n");
+		goto err_free_input;
 	}
 
-	data->family_id = reg_value;
-
-	err = request_threaded_irq(client->irq, NULL,
-				ft5x06_ts_interrupt,
-				pdata->irqflags | IRQF_ONESHOT,
-				client->dev.driver->name, data);
-	if (err) {
-		dev_err(&client->dev, "request irq failed\n");
-		goto free_reset_gpio;
+	error = ft5x06_load_firmware(ft5x06, pdata->firmware, NULL);
+	if (error) {
+		dev_err(dev, "fail to load firmware\n");
+		goto err_free_input;
 	}
 
-	err = device_create_file(&client->dev, &dev_attr_fw_name);
-	if (err) {
-		dev_err(&client->dev, "sys file creation failed\n");
-		goto irq_free;
+	ft5x06->input->enabled = true;
+	/* register input device */
+	error = input_register_device(ft5x06->input);
+	if (error) {
+		dev_err(dev, "fail to register input device\n");
+		goto err_free_input;
 	}
 
-	err = device_create_file(&client->dev, &dev_attr_update_fw);
-	if (err) {
-		dev_err(&client->dev, "sys file creation failed\n");
-		goto free_fw_name_sys;
+	ft5x06->input->phys =
+		kobject_get_path(&ft5x06->input->dev.kobj, GFP_KERNEL);
+	if (ft5x06->input->phys == NULL) {
+		dev_err(dev, "fail to get input device path\n");
+		error = -ENOMEM;
+		goto err_unregister_input;
 	}
 
-	err = device_create_file(&client->dev, &dev_attr_force_update_fw);
-	if (err) {
-		dev_err(&client->dev, "sys file creation failed\n");
-		goto free_update_fw_sys;
+	/* start interrupt process */
+	error = request_threaded_irq(ft5x06->irq, NULL, ft5x06_interrupt,
+				IRQF_TRIGGER_FALLING, "ft5x06", ft5x06);
+	if (error) {
+		dev_err(dev, "fail to request interrupt\n");
+		goto err_free_phys;
 	}
 
-	data->dir = debugfs_create_dir(FT_DEBUG_DIR_NAME, NULL);
-	if (data->dir == NULL || IS_ERR(data->dir)) {
-		pr_err("debugfs_create_dir failed(%ld)\n", PTR_ERR(data->dir));
-		err = PTR_ERR(data->dir);
-		goto free_force_update_fw_sys;
+	/* export sysfs entries */
+	ft5x06->vkeys_dir = kobject_create_and_add("board_properties", NULL);
+	if (ft5x06->vkeys_dir == NULL) {
+		error = -ENOMEM;
+		dev_err(dev, "fail to create board_properties entry\n");
+		goto err_free_irq;
 	}
 
-	temp = debugfs_create_file("addr", S_IRUSR | S_IWUSR, data->dir, data,
-				   &debug_addr_fops);
-	if (temp == NULL || IS_ERR(temp)) {
-		pr_err("debugfs_create_file failed: rc=%ld\n", PTR_ERR(temp));
-		err = PTR_ERR(temp);
-		goto free_debug_dir;
+	sysfs_attr_init(&ft5x06->vkeys_attr.attr);
+	ft5x06->vkeys_attr.attr.name = "virtualkeys.ft5x06";
+	ft5x06->vkeys_attr.attr.mode = (S_IRUSR|S_IRGRP|S_IROTH);
+	ft5x06->vkeys_attr.show      = ft5x06_vkeys_show;
+
+	error = sysfs_create_file(ft5x06->vkeys_dir, &ft5x06->vkeys_attr.attr);
+	if (error) {
+		dev_err(dev, "fail to create virtualkeys entry\n");
+		goto err_put_vkeys;
 	}
 
-	temp = debugfs_create_file("data", S_IRUSR | S_IWUSR, data->dir, data,
-				   &debug_data_fops);
-	if (temp == NULL || IS_ERR(temp)) {
-		pr_err("debugfs_create_file failed: rc=%ld\n", PTR_ERR(temp));
-		err = PTR_ERR(temp);
-		goto free_debug_dir;
+	error = sysfs_create_group(&dev->kobj, &ft5x06_attr_group);
+	if (error) {
+		dev_err(dev, "fail to export sysfs entires\n");
+		goto err_put_vkeys;
 	}
 
-	temp = debugfs_create_file("suspend", S_IRUSR | S_IWUSR, data->dir,
-					data, &debug_suspend_fops);
-	if (temp == NULL || IS_ERR(temp)) {
-		pr_err("debugfs_create_file failed: rc=%ld\n", PTR_ERR(temp));
-		err = PTR_ERR(temp);
-		goto free_debug_dir;
-	}
-
-	temp = debugfs_create_file("dump_info", S_IRUSR | S_IWUSR, data->dir,
-					data, &debug_dump_info_fops);
-	if (temp == NULL || IS_ERR(temp)) {
-		pr_err("debugfs_create_file failed: rc=%ld\n", PTR_ERR(temp));
-		err = PTR_ERR(temp);
-		goto free_debug_dir;
-	}
-
-	data->ts_info = kzalloc(FT_INFO_MAX_LEN, GFP_KERNEL);
-	if (!data->ts_info) {
-		dev_err(&client->dev, "Not enough memory\n");
-		goto free_debug_dir;
-	}
-
-	dev_err(&client->dev, "ft5x06 exit\n");
-
-	/*get some register information */
-	reg_addr = FT_REG_POINT_RATE;
-	ft5x06_i2c_read(client, &reg_addr, 1, &reg_value, 1);
-	if (err < 0)
-		dev_err(&client->dev, "report rate read failed");
-
-	dev_info(&client->dev, "report rate = %dHz\n", reg_value * 10);
-
-	reg_addr = FT_REG_THGROUP;
-	err = ft5x06_i2c_read(client, &reg_addr, 1, &reg_value, 1);
-	if (err < 0)
-		dev_err(&client->dev, "threshold read failed");
-
-	dev_dbg(&client->dev, "touch threshold = %d\n", reg_value * 4);
-
-	reg_addr = FT_REG_FW_VER;
-	err = ft5x06_i2c_read(client, &reg_addr, 1, &reg_value, 1);
-	if (err < 0)
-		dev_err(&client->dev, "version read failed");
-
-	dev_info(&client->dev, "Firmware version = 0x%x\n", reg_value);
-
-	FT_STORE_TS_INFO(data->ts_info, data->family_id, reg_value);
-
-	//add for ADB update
-	update_client = client;
-	ft_update_result_flag = 0;
-	
-	dir = proc_mkdir("touchscreen", NULL);
-	refresh = create_proc_entry("ts_information", 0664, dir);
-	if (refresh) {
-		refresh->data		= NULL;
-		refresh->read_proc  = proc_read_val;
-		refresh->write_proc = proc_write_val;
-	}
-	
-	#if defined(CONFIG_SUPPORT_FTS_CTP_UPG)
-	err = Ft5x0x_fwupdate_init(client);
-	if ( err < 0 )
-		printk("%s: firmware update initialization failed!\n ",__func__);
-	#endif	
-//add end	
-	
 #if defined(CONFIG_FB)
-	data->fb_notif.notifier_call = fb_notifier_callback;
+	ft5x06->fb_notif.notifier_call = fb_notifier_callback;
 
-	err = fb_register_client(&data->fb_notif);
+	 error = fb_register_client(&ft5x06->fb_notif);
 
-	if (err)
-		dev_err(&client->dev, "Unable to register fb_notifier: %d\n",
-			err);
+	 if (error)
+		 dev_err(dev, "Unable to register fb_notifier: %d\n",
+			 error);
 #elif defined(CONFIG_HAS_EARLYSUSPEND)
-	data->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN +
-						    FT_SUSPEND_LEVEL;
-	data->early_suspend.suspend = ft5x06_ts_early_suspend;
-	data->early_suspend.resume = ft5x06_ts_late_resume;
-	register_early_suspend(&data->early_suspend);
+	ft5x06->early_suspend.level   = EARLY_SUSPEND_LEVEL_BLANK_SCREEN+1;
+	ft5x06->early_suspend.suspend = ft5x06_early_suspend;
+	ft5x06->early_suspend.resume  = ft5x06_early_resume;
+	register_early_suspend(&ft5x06->early_suspend);
 #endif
 
 	return 0;
