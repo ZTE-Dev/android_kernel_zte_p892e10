@@ -212,7 +212,8 @@ void mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 {
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 	struct mdss_panel_info *pinfo = NULL;
-	//int i;	
+	static bool gpio_request_done;
+	int i, rc = 0;
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -236,8 +237,16 @@ void mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 	pr_debug("%s: enable = %d\n", __func__, enable);
 	pinfo = &(ctrl_pdata->panel_data.panel_info);
 
+	if (!gpio_request_done && enable) {
+		rc = mdss_dsi_request_gpios(ctrl_pdata);
+		if (rc) {
+			pr_err("gpio request failed\n");
+			return rc;
+		}
+		gpio_request_done = true;
+	}
+
 	if (enable) {
-    /*
 		if (gpio_is_valid(ctrl_pdata->disp_en_gpio))
 			gpio_set_value((ctrl_pdata->disp_en_gpio), 1);
 
@@ -276,6 +285,13 @@ void mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 ////
 		if (gpio_is_valid(ctrl_pdata->disp_en_gpio))
 			gpio_set_value((ctrl_pdata->disp_en_gpio), 0);
+			gpio_free(ctrl_pdata->disp_en_gpio);
+		}
+		gpio_set_value((ctrl_pdata->rst_gpio), 0);
+		gpio_free(ctrl_pdata->rst_gpio);
+		if (gpio_is_valid(ctrl_pdata->mode_gpio))
+			gpio_free(ctrl_pdata->mode_gpio);
+		gpio_request_done = false;
 	}
 }
 
@@ -486,7 +502,7 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 	}
 
     // add by guohaijing 2014.05.21 start
-    // ÔÚbl_levelÎª0»ò´Ó0±äÎª·Ç0µÄÊ±ºò´òÓ¡log
+    // ï¿½ï¿½bl_levelÎª0ï¿½ï¿½ï¿½0ï¿½ï¿½Îªï¿½ï¿½0ï¿½ï¿½Ê±ï¿½ï¿½ï¿½Ó¡log
     if (bl_level_last == 0 || bl_level == 0)
     {
         printk("mdss_dsi_panel_bl_ctrl, bl_level=%d\n",bl_level);
