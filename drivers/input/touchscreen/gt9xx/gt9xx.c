@@ -1889,9 +1889,6 @@ static int goodix_ts_probe(struct i2c_client *client,
 	if (ts->use_irq)
 		gtp_irq_enable(ts);
 
-#if GTP_CREATE_WR_NODE
-	init_wr_node(client);
-#endif
 
 #if GTP_ESD_PROTECT
 	gtp_esd_switch(client, SWITCH_ON);
@@ -1957,9 +1954,6 @@ static int goodix_ts_remove(struct i2c_client *client)
 	unregister_early_suspend(&ts->early_suspend);
 #endif
 
-#if GTP_CREATE_WR_NODE
-	uninit_wr_node();
-#endif
 
 #if GTP_ESD_PROTECT
 	cancel_work_sync(gtp_esd_check_workqueue);

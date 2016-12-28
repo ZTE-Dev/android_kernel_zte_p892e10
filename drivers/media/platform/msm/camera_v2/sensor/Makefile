@@ -30,4 +30,3 @@ obj-$(CONFIG_SP0A28) += sp0a28.o
 obj-$(CONFIG_SP0A20) += sp0a20.o 
 obj-$(CONFIG_OV9760) += ov9760.o
 obj-$(CONFIG_MSMB_CAMERA) += eeprom/
-obj-$(CONFIG_SENSOR_INFO) += msm_sensorinfo.o

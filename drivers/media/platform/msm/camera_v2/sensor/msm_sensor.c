@@ -2183,16 +2183,6 @@ int32_t msm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 			s_ctrl->sensordata->sensor_name);
 		return rc;
 	}
-#ifdef CONFIG_SENSOR_INFO 
-if(chipid==0x4800||chipid==0x1481||chipid==0x8830||chipid==0x0135)
-{
-    	msm_sensorinfo_set_back_sensor_id(s_ctrl->sensordata->slave_info->sensor_id);
- }
-else if(chipid==0x0132||chipid==0x9760||chipid==0x0208)  	
-      msm_sensorinfo_set_front_sensor_id(s_ctrl->sensordata->slave_info->sensor_id);	
-#else
-  //do nothing here
-#endif
 	CDBG("%s: read id: %x expected id %x:\n", __func__, chipid,
 		s_ctrl->sensordata->slave_info->sensor_id);
 	if (chipid != s_ctrl->sensordata->slave_info->sensor_id) {
